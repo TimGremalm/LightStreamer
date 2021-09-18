@@ -207,14 +207,13 @@ void tsl2591task(void *pvParameters) {
 	init_sensor();
 	
 	while(1) {
-		//ESP_LOGI(TAG, "Status %u", getStatus());
 		readLight();
-		ESP_LOGI(TAG, "");
-		ESP_LOGI(TAG, "Broadband %d", tsl2591_config.light_broadband);
-		ESP_LOGI(TAG, "Visible %d", tsl2591_config.light_visible);
-		ESP_LOGI(TAG, "Infrared %d", tsl2591_config.light_infrared);
-		ESP_LOGI(TAG, "Lux %f", tsl2591_config.light_lux);
-		vTaskDelay(5 / portTICK_PERIOD_MS);
+		// Only print values every 20'th value to reduce print
+		if ((esp_random() % 60) == 0) {
+			ESP_LOGI(TAG, "Sampled raw values (Reduced print) Broadband: %d Visible: %d Infrared: %d, Calculated Lux %f",
+					tsl2591_config.light_broadband, tsl2591_config.light_visible, tsl2591_config.light_infrared, tsl2591_config.light_lux);
+		}
+		vTaskDelay(300 / portTICK_PERIOD_MS);
 	}
 }
 
