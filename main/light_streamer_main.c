@@ -16,6 +16,8 @@ http://tim.gremalm.se
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
+#include "tsl2591.h"
+
 // The examples use WiFi configuration that you can set via project configuration menu.
 #define EXAMPLE_ESP_WIFI_SSID		CONFIG_ESP_WIFI_SSID
 #define EXAMPLE_ESP_WIFI_PASS		CONFIG_ESP_WIFI_PASSWORD
@@ -31,8 +33,9 @@ static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_FAIL_BIT		BIT1
 
 static const char *TAG = "Main";
-
 static int s_retry_num = 0;
+
+tsl2591_config_t tsl2591config;
 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -130,6 +133,9 @@ void app_main(void)
 		ret = nvs_flash_init();
 	}
 	ESP_ERROR_CHECK(ret);
+
+
+	xTaskCreate(&tsl2591task, "tsl2591task", 8192, &tsl2591config, 5, NULL);
 
 	ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
 	wifi_init_sta();
