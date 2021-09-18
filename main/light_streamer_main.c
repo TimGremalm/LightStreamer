@@ -135,6 +135,8 @@ void app_main(void)
 	ESP_ERROR_CHECK(ret);
 
 
+	tsl2591config.integration = TSL2591_INTEGRATIONTIME_500MS;
+	tsl2591config.gain = TSL2591_GAIN_MED;
 	xTaskCreate(&tsl2591task, "tsl2591task", 8192, &tsl2591config, 5, NULL);
 
 	ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
