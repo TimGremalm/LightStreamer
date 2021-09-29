@@ -30,4 +30,10 @@ menu "Light Streamer Configuration"
         help
             GPIO number for I2C Master data line.
 
+    config BROKER_URL
+        string "MQTT Broker URL"
+        default "mqtt://192.168.0.1"
+        help
+            URL of the MQTT broker to connect to
+
 endmenu

@@ -2,6 +2,9 @@
 #define TSL2591_H
 
 #include <stdint.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+
 
 // https://github.com/adafruit/Adafruit_TSL2591_Library/blob/master/Adafruit_TSL2591.h
 #define TSL2591_COMMAND_BIT                                                    \
@@ -113,6 +116,7 @@ typedef struct {
 	uint16_t light_infrared;
 	uint16_t light_visible;
 	float light_lux;
+  QueueHandle_t queue_lux;
 } tsl2591_config_t;
 
 void tsl2591task(void *pvParameters);

@@ -7,6 +7,7 @@ http://tim.gremalm.se
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -15,8 +16,10 @@ http://tim.gremalm.se
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
+#include "esp_netif.h"
 
 #include "tsl2591.h"
+#include "mqtthandler.h"
 
 // The examples use WiFi configuration that you can set via project configuration menu.
 #define EXAMPLE_ESP_WIFI_SSID		CONFIG_ESP_WIFI_SSID
@@ -36,6 +39,7 @@ static const char *TAG = "Main";
 static int s_retry_num = 0;
 
 tsl2591_config_t tsl2591config;
+mqtthandler_config_t mqtthandlerconfig;
 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -135,9 +139,15 @@ void app_main(void) {
 
 	tsl2591config.integration = TSL2591_INTEGRATIONTIME_500MS;
 	tsl2591config.gain = TSL2591_GAIN_MED;
+	tsl2591config.queue_lux = xQueueCreate(10, sizeof(float));  // queue capable of containing 10 float values
 	xTaskCreate(&tsl2591task, "tsl2591task", 8192, &tsl2591config, 5, NULL);
 
 	ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
 	wifi_init_sta();
+
+    ESP_ERROR_CHECK(esp_netif_init());
+
+	mqtthandlerconfig.sensortsl2591 = &tsl2591config;
+	xTaskCreate(&mqtthandlertask, "mqtthandlertask", 8192, &mqtthandlerconfig, 5, NULL);
 }
 

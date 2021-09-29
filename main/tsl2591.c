@@ -213,7 +213,11 @@ void tsl2591task(void *pvParameters) {
 			ESP_LOGI(TAG, "Sampled raw values (Reduced print) Broadband: %d Visible: %d Infrared: %d, Calculated Lux %f",
 					tsl2591_config.light_broadband, tsl2591_config.light_visible, tsl2591_config.light_infrared, tsl2591_config.light_lux);
 		}
-		vTaskDelay(300 / portTICK_PERIOD_MS);
+		// Send lux float. Wait for 10 ticks for space to become available if necessary.
+		if (xQueueGenericSend(tsl2591_config.queue_lux, ( void * ) &tsl2591_config.light_lux, (TickType_t) 10, queueSEND_TO_BACK ) != pdPASS) {
+			ESP_LOGI(TAG, "Failed to post the message, even after 10 ticks.");
+		}
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
 	}
 }
 
