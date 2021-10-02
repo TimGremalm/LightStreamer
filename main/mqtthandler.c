@@ -106,6 +106,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 						gpio_set_level(relays[relay_number], 0);
 						// Also disable any timer
 						timer_relay_enabled[relay_number] = false;
+						esp_mqtt_client_publish(client, topic_relays_get[relay_number], "0", 0, 1, 0);
 					} else {
 						gpio_set_level(relays[relay_number], 1);
 						// Enable timeout in ms if num is more than 1
@@ -115,6 +116,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 							timer_relay_goal[relay_number] = parsed_num;
 							ESP_LOGI(TAG, "Start timer for relay: %d start: %d", relay_number, timer_relay_start[i]);
 						}
+						esp_mqtt_client_publish(client, topic_relays_get[relay_number], "1", 0, 1, 0);
 					}
 					ESP_LOGI(TAG, "Relay %u num %d", relay_number, parsed_num);
 				} else {
