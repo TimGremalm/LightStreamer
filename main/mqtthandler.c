@@ -12,14 +12,37 @@
 
 static const char *TAG = "MQTT";
 
+#define GPIO_REALY1 13
+#define GPIO_REALY2 15
+
 mqtthandler_config_t mqtthandler_config;
 uint8_t mac[6];
 char macstring[13];
+char topic_lux[100];
+char topic_relay1[100];
+char topic_relay2[100];
 
 static void log_error_if_nonzero(const char *message, int error_code) {
 	if (error_code != 0) {
 		ESP_LOGE(TAG, "Last error %s: 0x%x", message, error_code);
 	}
+}
+
+int atoin(const char* str, int len) {
+	// Like atoi, but will only parse up to length
+	int i;
+	int ret = 0;
+	int ret_factor = 1;
+	for(i = 0; i < len; ++i) {
+		if (str[i] == '-' && i == 0) {
+			ret_factor = -1;
+		} else if (str[i] >= '0' && str[i] <= '9') {
+			ret = ret * 10 + (str[i] - '0');
+		} else {
+			return ret * ret_factor;
+		}
+	}
+	return ret * ret_factor;
 }
 
 /*
@@ -35,22 +58,17 @@ static void log_error_if_nonzero(const char *message, int error_code) {
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
 	ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
 	esp_mqtt_event_handle_t event = event_data;
-	// esp_mqtt_client_handle_t client = event->client;
-	// int msg_id;
+	esp_mqtt_client_handle_t client = event->client;
+	int msg_id;
 	switch ((esp_mqtt_event_id_t)event_id) {
 		case MQTT_EVENT_CONNECTED:
 			ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-			// msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
-			// ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
 
-			// msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
-			// ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+			msg_id = esp_mqtt_client_subscribe(client, topic_relay1, 0);
+			ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
 
-			// msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-			// ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-			// msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-			// ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
+			msg_id = esp_mqtt_client_subscribe(client, topic_relay2, 0);
+			ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
 			break;
 		case MQTT_EVENT_DISCONNECTED:
 			ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -66,8 +84,32 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 			break;
 		case MQTT_EVENT_DATA:
 			ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-			printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-			printf("DATA=%.*s\r\n", event->data_len, event->data);
+			uint8_t relay_number = 0;
+			if (strncmp(event->topic, topic_relay1, event->topic_len) == 0) {
+				relay_number = 1;
+			} else if (strncmp(event->topic, topic_relay2, event->topic_len) == 0) {
+				relay_number = 2;
+			} else {
+				ESP_LOGE(TAG, "Invalid Topic");
+				printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+				printf("DATA=%.*s\r\n", event->data_len, event->data);
+			}
+			if (relay_number > 0 && event->data_len > 0 && event->data_len <= 7) {
+				// Only try to parse data up to 7 cahracters
+				int parsed_num = atoin(event->data, event->data_len);
+				if (parsed_num >= 0 && parsed_num <= 65535) {
+					// Only accept a range of 0-65535
+					ESP_LOGI(TAG, "Relay %u num %d", relay_number, parsed_num);
+				} else {
+					ESP_LOGE(TAG, "Out of range, allowed 0-65535");
+					printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+					printf("DATA=%.*s\r\n", event->data_len, event->data);
+				}
+			} else {
+				ESP_LOGE(TAG, "Invalid relay number or data");
+				printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+				printf("DATA=%.*s\r\n", event->data_len, event->data);
+			}
 			break;
 		case MQTT_EVENT_ERROR:
 			ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
@@ -92,6 +134,14 @@ void mqtthandlertask(void *pvParameters) {
 	sprintf(macstring, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	ESP_LOGI(TAG, "Mac: %s", macstring);
 
+	// Configure topics based on MAC address
+	sprintf(topic_lux, "/%s/tsl2591/lux", macstring);
+	ESP_LOGI(TAG, "Topic Lux: %s", topic_lux);
+	sprintf(topic_relay1, "/%s/relay/1", macstring);
+	ESP_LOGI(TAG, "Topic realy 1: %s", topic_relay1);
+	sprintf(topic_relay2, "/%s/relay/2", macstring);
+	ESP_LOGI(TAG, "Topic realy 2: %s", topic_relay2);
+
 	esp_mqtt_client_config_t mqtt_cfg = {
 		.uri = CONFIG_BROKER_URL,
 	};
@@ -103,11 +153,9 @@ void mqtthandlertask(void *pvParameters) {
 	while(1) {
 		if (xQueueReceive(mqtthandler_config.sensortsl2591->queue_lux, &buf_lux, (TickType_t) 10)) {
 			// ESP_LOGI(TAG, "From queue %f", buf_lux);
-			char stopic[100];
-			sprintf(stopic, "/%s/tsl2591/lux", macstring);
 			char slux[100];
 			sprintf(slux, "%f", buf_lux);
-			esp_mqtt_client_publish(client, stopic, slux, 0, 1, 0);
+			esp_mqtt_client_publish(client, topic_lux, slux, 0, 1, 0);
 		} else {
 			// ESP_LOGI(TAG, "Error receiving from queue_lux");
 		}
