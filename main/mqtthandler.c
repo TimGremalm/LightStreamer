@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "driver/gpio.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +15,8 @@ static const char *TAG = "MQTT";
 
 #define GPIO_REALY1 13
 #define GPIO_REALY2 15
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_REALY1) | (1ULL<<GPIO_REALY2))
+uint8_t relays[2] = {GPIO_REALY1, GPIO_REALY2};
 
 mqtthandler_config_t mqtthandler_config;
 uint8_t mac[6];
@@ -99,6 +102,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 				int parsed_num = atoin(event->data, event->data_len);
 				if (parsed_num >= 0 && parsed_num <= 65535) {
 					// Only accept a range of 0-65535
+					if (parsed_num == 0) {
+						gpio_set_level(relays[relay_number-1], 0);
+					} else {
+						gpio_set_level(relays[relay_number-1], 1);
+					}
 					ESP_LOGI(TAG, "Relay %u num %d", relay_number, parsed_num);
 				} else {
 					ESP_LOGE(TAG, "Out of range, allowed 0-65535");
@@ -130,11 +138,19 @@ void mqtthandlertask(void *pvParameters) {
 	mqtthandler_config = *(mqtthandler_config_t *) pvParameters;
 	ESP_LOGI(TAG, "Start");
 
+	// Configure GPIO for relays
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
+    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    io_conf.pull_down_en = 0;
+    io_conf.pull_up_en = 0;
+    gpio_config(&io_conf);
+
+	// Configure topics based on MAC address
 	esp_read_mac(mac, ESP_MAC_WIFI_STA);
 	sprintf(macstring, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	ESP_LOGI(TAG, "Mac: %s", macstring);
-
-	// Configure topics based on MAC address
 	sprintf(topic_lux, "/%s/tsl2591/lux", macstring);
 	ESP_LOGI(TAG, "Topic Lux: %s", topic_lux);
 	sprintf(topic_relay1, "/%s/relay/1", macstring);
@@ -142,6 +158,7 @@ void mqtthandlertask(void *pvParameters) {
 	sprintf(topic_relay2, "/%s/relay/2", macstring);
 	ESP_LOGI(TAG, "Topic realy 2: %s", topic_relay2);
 
+	// Connect to MQTT broker
 	esp_mqtt_client_config_t mqtt_cfg = {
 		.uri = CONFIG_BROKER_URL,
 	};
@@ -156,6 +173,10 @@ void mqtthandlertask(void *pvParameters) {
 			char slux[100];
 			sprintf(slux, "%f", buf_lux);
 			esp_mqtt_client_publish(client, topic_lux, slux, 0, 1, 0);
+			sprintf(slux, "%d", gpio_get_level(GPIO_REALY1));
+			esp_mqtt_client_publish(client, topic_relay1, slux, 0, 1, 0);
+			sprintf(slux, "%d", gpio_get_level(GPIO_REALY2));
+			esp_mqtt_client_publish(client, topic_relay2, slux, 0, 1, 0);
 		} else {
 			// ESP_LOGI(TAG, "Error receiving from queue_lux");
 		}
