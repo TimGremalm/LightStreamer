@@ -13,17 +13,21 @@
 
 static const char *TAG = "MQTT";
 
+#define NUM_RELAYS 2
 #define GPIO_REALY1 13
 #define GPIO_REALY2 15
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_REALY1) | (1ULL<<GPIO_REALY2))
-uint8_t relays[2] = {GPIO_REALY1, GPIO_REALY2};
+uint8_t relays[NUM_RELAYS] = {GPIO_REALY1, GPIO_REALY2};
 
 mqtthandler_config_t mqtthandler_config;
 uint8_t mac[6];
 char macstring[13];
 char topic_lux[100];
-char topic_relay1[100];
-char topic_relay2[100];
+char topic_relays_get[NUM_RELAYS][100];
+char topic_relays_set[NUM_RELAYS][100];
+bool timer_relay_enabled[NUM_RELAYS];
+uint32_t timer_relay_start[NUM_RELAYS];
+uint16_t timer_relay_goal[NUM_RELAYS];
 
 static void log_error_if_nonzero(const char *message, int error_code) {
 	if (error_code != 0) {
@@ -63,15 +67,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 	esp_mqtt_event_handle_t event = event_data;
 	esp_mqtt_client_handle_t client = event->client;
 	int msg_id;
+	int i = 0;
 	switch ((esp_mqtt_event_id_t)event_id) {
 		case MQTT_EVENT_CONNECTED:
 			ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
 
-			msg_id = esp_mqtt_client_subscribe(client, topic_relay1, 0);
-			ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-			msg_id = esp_mqtt_client_subscribe(client, topic_relay2, 0);
-			ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+			for (i=0; i < NUM_RELAYS; i++) {
+				msg_id = esp_mqtt_client_subscribe(client, topic_relays_set[i], 0);
+				ESP_LOGI(TAG, "sent subscribe to %s successful, msg_id=%d", topic_relays_set[i], msg_id);
+			}
 			break;
 		case MQTT_EVENT_DISCONNECTED:
 			ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -88,24 +92,29 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 		case MQTT_EVENT_DATA:
 			ESP_LOGI(TAG, "MQTT_EVENT_DATA");
 			uint8_t relay_number = 0;
-			if (strncmp(event->topic, topic_relay1, event->topic_len) == 0) {
-				relay_number = 1;
-			} else if (strncmp(event->topic, topic_relay2, event->topic_len) == 0) {
-				relay_number = 2;
-			} else {
-				ESP_LOGE(TAG, "Invalid Topic");
-				printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-				printf("DATA=%.*s\r\n", event->data_len, event->data);
+			for (i=0; i < NUM_RELAYS; i++) {
+				if (strncmp(event->topic, topic_relays_set[i], event->topic_len) == 0) {
+					relay_number = i;
+				}
 			}
-			if (relay_number > 0 && event->data_len > 0 && event->data_len <= 7) {
+			if (event->data_len > 0 && event->data_len <= 7) {
 				// Only try to parse data up to 7 cahracters
 				int parsed_num = atoin(event->data, event->data_len);
 				if (parsed_num >= 0 && parsed_num <= 65535) {
 					// Only accept a range of 0-65535
 					if (parsed_num == 0) {
-						gpio_set_level(relays[relay_number-1], 0);
+						gpio_set_level(relays[relay_number], 0);
+						// Also disable any timer
+						timer_relay_enabled[relay_number] = false;
 					} else {
-						gpio_set_level(relays[relay_number-1], 1);
+						gpio_set_level(relays[relay_number], 1);
+						// Enable timeout in ms if num is more than 1
+						if (parsed_num > 1) {
+							timer_relay_enabled[relay_number] = true;
+							timer_relay_start[relay_number] = xTaskGetTickCount() * portTICK_PERIOD_MS;
+							timer_relay_goal[relay_number] = parsed_num;
+							ESP_LOGI(TAG, "Start timer for relay: %d start: %d", relay_number, timer_relay_start[i]);
+						}
 					}
 					ESP_LOGI(TAG, "Relay %u num %d", relay_number, parsed_num);
 				} else {
@@ -137,6 +146,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 void mqtthandlertask(void *pvParameters) {
 	mqtthandler_config = *(mqtthandler_config_t *) pvParameters;
 	ESP_LOGI(TAG, "Start");
+	int i = 0;
 
 	// Configure GPIO for relays
     gpio_config_t io_conf = {};
@@ -146,17 +156,24 @@ void mqtthandlertask(void *pvParameters) {
     io_conf.pull_down_en = 0;
     io_conf.pull_up_en = 0;
     gpio_config(&io_conf);
+	for (i=0; i < NUM_RELAYS; i++) {
+		timer_relay_enabled[i] = false;
+	}
 
 	// Configure topics based on MAC address
 	esp_read_mac(mac, ESP_MAC_WIFI_STA);
 	sprintf(macstring, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	ESP_LOGI(TAG, "Mac: %s", macstring);
+	// Lux topic
 	sprintf(topic_lux, "/%s/tsl2591/lux", macstring);
 	ESP_LOGI(TAG, "Topic Lux: %s", topic_lux);
-	sprintf(topic_relay1, "/%s/relay/1", macstring);
-	ESP_LOGI(TAG, "Topic realy 1: %s", topic_relay1);
-	sprintf(topic_relay2, "/%s/relay/2", macstring);
-	ESP_LOGI(TAG, "Topic realy 2: %s", topic_relay2);
+	// Relay topics
+	for (i=0; i < NUM_RELAYS; i++) {
+		sprintf(topic_relays_get[i], "/%s/relay/%d/get", macstring, i);
+		ESP_LOGI(TAG, "Topic relay get %d: %s", i, topic_relays_get[i]);
+		sprintf(topic_relays_set[i], "/%s/relay/%d/set", macstring, i);
+		ESP_LOGI(TAG, "Topic relay set %d: %s", i, topic_relays_set[i]);
+	}
 
 	// Connect to MQTT broker
 	esp_mqtt_client_config_t mqtt_cfg = {
@@ -170,17 +187,30 @@ void mqtthandlertask(void *pvParameters) {
 	while(1) {
 		if (xQueueReceive(mqtthandler_config.sensortsl2591->queue_lux, &buf_lux, (TickType_t) 10)) {
 			// ESP_LOGI(TAG, "From queue %f", buf_lux);
-			char slux[100];
-			sprintf(slux, "%f", buf_lux);
-			esp_mqtt_client_publish(client, topic_lux, slux, 0, 1, 0);
-			sprintf(slux, "%d", gpio_get_level(GPIO_REALY1));
-			esp_mqtt_client_publish(client, topic_relay1, slux, 0, 1, 0);
-			sprintf(slux, "%d", gpio_get_level(GPIO_REALY2));
-			esp_mqtt_client_publish(client, topic_relay2, slux, 0, 1, 0);
+			char buf_message[100];
+			sprintf(buf_message, "%f", buf_lux);
+			esp_mqtt_client_publish(client, topic_lux, buf_message, 0, 1, 0);
+			for (i=0; i < NUM_RELAYS; i++) {
+				sprintf(buf_message, "%d", gpio_get_level(relays[i]));
+				esp_mqtt_client_publish(client, topic_relays_get[i], buf_message, 0, 1, 0);
+			}
 		} else {
 			// ESP_LOGI(TAG, "Error receiving from queue_lux");
 		}
 
+		uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+		uint32_t delta = 0;
+		for (i=0; i < NUM_RELAYS; i++) {
+			if (timer_relay_enabled[i] == true) {
+				delta = now - timer_relay_start[i];
+				// ESP_LOGI(TAG, "Timer %d: %d %d", i, timer_relay_start[i], delta);
+				if (delta > timer_relay_goal[i]) {
+					ESP_LOGI(TAG, "Timer has passed, turn off relay: %d start: %d delta: %d", i, timer_relay_start[i], delta);
+					gpio_set_level(relays[i], 0);
+					timer_relay_enabled[i] = false;
+				}
+			}
+		}
 		vTaskDelay(10 / portTICK_PERIOD_MS);
 	}
 }
